@@ -1,2 +1,2 @@
-# LSresult
-boards result fetching
+# Biharfetch
+fetch bihar results
