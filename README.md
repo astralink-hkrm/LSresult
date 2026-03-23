@@ -1,0 +1,2 @@
+# LSresult
+boards result fetching
