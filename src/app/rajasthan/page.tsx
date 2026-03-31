@@ -119,45 +119,45 @@ export default function RajasthanPage() {
          .replace(/\s+/g, ' ')
          .trim();
 
-      const getValue = (label: string): string => {
-        const regex = new RegExp(`<p class="lbl">${label}:</p>\\s*<p class="name">([\\s\\S]*?)</p>`, 'i');
-        const match = html.match(regex);
-        return match ? cleanText(match[1]) : '';
-      };
+      // Candidate Info
+      const nameMatch = html.match(/Examinee Name[\s\S]*?<td[^>]*?>[\s\S]*?:[\s]*&nbsp;([\s\S]*?)<\/font>/i);
+      const candidateName = nameMatch ? cleanText(nameMatch[1]) : '';
 
-      const candidateName = getValue('Candidate Name');
-      const rollNumber = getValue('Roll No');
-      const fatherName = getValue('Father Name');
-      const motherName = getValue('Mother Name');
-      const schoolName = getValue("School/Center's Name");
+      const fatherMatch = html.match(/Father's Name[\s\S]*?<td[^>]*?>[\s\S]*?:[\s]*&nbsp;([\s\S]*?)<\/font>/i);
+      const fatherName = fatherMatch ? cleanText(fatherMatch[1]) : '';
 
+      const motherMatch = html.match(/Mother's Name[\s\S]*?<td[^>]*?>[\s\S]*?:[\s]*&nbsp;([\s\S]*?)<\/font>/i);
+      const motherName = motherMatch ? cleanText(motherMatch[1]) : '';
+
+      // Roll No and School
+      const rollSchoolMatch = html.match(/Roll No\.[\s\S]*?School[\s\S]*?<\/tr>[\s\S]*?<tr>[\s\S]*?<td[^>]*?>[\s\S]*?<font[^>]*?>([\s\S]*?)<\/font>[\s\S]*?<\/td>[\s\S]*?<td[^>]*?>[\s\S]*?<font[^>]*?>([\s\S]*?)<\/font>[\s\S]*?<\/td>/i);
+      const rollNumber = rollSchoolMatch ? cleanText(rollSchoolMatch[1]) : '';
+      const schoolName = rollSchoolMatch ? cleanText(rollSchoolMatch[2]) : '';
+
+      // Subjects
       const subjects: Subject[] = [];
-      const subjectRowRegex = /<div class="subj_row">([\s\S]*?)<\/div>/gi;
+      const subjectRowRegex = /<tr[^>]*>[\s\S]*?<td[^>]*height="22"[^>]*>[\s\S]*?<font[^>]*?>&nbsp;([\s\S]*?)<\/font>[\s\S]*?<\/td>([\s\S]*?)<\/tr>/gi;
       let match;
       while ((match = subjectRowRegex.exec(html)) !== null) {
-        const rowContent = match[1];
-        if (rowContent.includes('<span>Sub</span>') && rowContent.includes('<span>Total</span>')) {
-          const nameMatch = rowContent.match(/<span>Sub<\/span>([\s\S]*?)<\/p>/i);
-          const totalMatch = rowContent.match(/<span>Total<\/span>([\s\S]*?)<\/p>/i);
-          
-          if (nameMatch && totalMatch) {
-            subjects.push({
-              name: cleanText(nameMatch[1]),
-              total: cleanText(totalMatch[1]),
-            });
-          }
+        const subjectName = cleanText(match[1]);
+        const cellsContent = match[2];
+        const cellMatches = cellsContent.match(/<td[^>]*?>[\s\S]*?<font[^>]*?>([\s\S]*?)<\/font>/gi);
+        if (cellMatches && cellMatches.length > 0) {
+          const lastCell = cellMatches[cellMatches.length - 1];
+          const totalMarks = cleanText(lastCell);
+          subjects.push({ name: subjectName, total: totalMarks });
         }
       }
 
-      const getSummaryValue = (label: string): string => {
-        const regex = new RegExp(`<p class="span25">${label}\\s*:</p>\\s*<p class="span22">([\\s\\S]*?)</p>`, 'i');
-        const match = html.match(regex);
-        return match ? cleanText(match[1]) : '';
-      };
+      // Summary
+      const totalMarksMatch = html.match(/Total marks obtain:&nbsp;\s*([\s\S]*?)<\/strong>/i);
+      const totalMarks = totalMarksMatch ? cleanText(totalMarksMatch[1]) : '';
 
-      const totalMarks = getSummaryValue('Total Marks');
-      const resultDivision = getSummaryValue('Result');
-      const percentage = getSummaryValue('Percentage');
+      const percentageMatch = html.match(/Percentage:&nbsp;\s*([\s\S]*?)<\/strong>/i);
+      const percentage = percentageMatch ? cleanText(percentageMatch[1]) : '';
+
+      const resultMatch = html.match(/Result:&nbsp;([\s\S]*?)<\/strong>/i);
+      const resultDivision = resultMatch ? cleanText(resultMatch[1]) : '';
 
       return {
         candidateName,
