@@ -6,7 +6,6 @@ import RajasthanResult from '@/models/RajasthanResult';
 const SCIENCE_URL = 'https://liveresults.jagranjosh.com/Result2026/jsp/rj/RJ_SC12.jsp';
 const ARTS_URL = 'https://liveresults.jagranjosh.com/Result2026/jsp/rj/RJ_ART12.jsp';
 
-// Helper for parsing results (copied from page.tsx logic for consistency)
 const parseResultHtml = (html: string) => {
   try {
     const cleanText = (s: string): string => 
@@ -92,7 +91,7 @@ export async function POST(req: NextRequest) {
     const response = await axios.post(
       targetUrl,
       `rollNo=${rollNo}`,
-      { headers, maxRedirects: 5, timeout: 15000 } // Added timeout
+      { headers, maxRedirects: 5, timeout: 15000 }
     );
 
     const html = response.data;
@@ -105,37 +104,52 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Save to MongoDB
+    const resultData = parseResultHtml(html);
+    if (!resultData) {
+      return NextResponse.json({
+        success: false,
+        error: 'Failed to parse result',
+      });
+    }
+
+    console.log(`[API POST] Result fetched for ${resultData.candidateName}`);
+
+    let saved = false;
+    let dbError: string | null = null;
+    
     try {
       console.log(`[API POST] Connecting to MongoDB...`);
       const db = await dbConnect();
+      
       if (db) {
-        const resultData = parseResultHtml(html);
-        if (resultData) {
-          console.log(`[API POST] Saving result for ${resultData.candidateName}`);
-          await RajasthanResult.findOneAndUpdate(
-            { rollNo: resultData.rollNumber },
-            {
-              ...resultData,
-              rollNo: resultData.rollNumber,
-              stream,
-              mobile,
-              fetchedAt: new Date(),
-            },
-            { upsert: true, new: true }
-          );
-          console.log(`[API POST] Result saved to database`);
-        }
+        await RajasthanResult.findOneAndUpdate(
+          { rollNo: resultData.rollNumber },
+          {
+            ...resultData,
+            rollNo: resultData.rollNumber,
+            stream,
+            mobile,
+            fetchedAt: new Date(),
+          },
+          { upsert: true, new: true }
+        );
+        saved = true;
+        console.log(`[API POST] Result saved to database`);
       } else {
-        console.log(`[API POST] MongoDB unavailable - result not saved`);
+        dbError = 'Database connection unavailable';
+        console.log(`[API POST] MongoDB unavailable - result NOT saved`);
       }
-    } catch (dbError) {
+    } catch (err) {
+      const error = err as Error;
+      dbError = error.message;
       console.error(`[API POST] Database error:`, dbError);
     }
 
     return NextResponse.json({
       success: true,
       html,
+      saved,
+      dbError: dbError || undefined,
     });
   } catch (error: unknown) {
     const err = error as { message?: string; response?: { status?: number } };

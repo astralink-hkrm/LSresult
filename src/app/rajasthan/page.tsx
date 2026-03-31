@@ -200,7 +200,11 @@ export default function RajasthanPage() {
                 : s
             )
           );
-          addLog(`Success & Saved: ${resultData.candidateName}`);
+          if (data.saved) {
+            addLog(`Success & Saved: ${resultData.candidateName}`);
+          } else {
+            addLog(`Success (DB unavailable): ${resultData.candidateName}`);
+          }
           return true;
         } else {
           throw new Error('Parsing failed');
