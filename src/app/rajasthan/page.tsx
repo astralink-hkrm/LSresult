@@ -9,45 +9,69 @@ interface Student {
   rollNo: string;
   name?: string;
   mobile?: string;
-  courseName?: string;
-  remark?: string;
-  status?: 'pending' | 'fetching' | 'success' | 'error';
+  status?: 'pending' | 'fetching' | 'success' | 'error' | 'saved';
   result?: ResultData;
   error?: string;
 }
 
 interface ResultData {
-  studentName: string;
+  candidateName: string;
   fatherName: string;
   motherName: string;
   schoolName: string;
   rollNumber: string;
   subjects: Subject[];
   totalMarks: string;
-  percentage: number;
-  result: string;
+  resultDivision: string;
+  percentage: string;
 }
 
 interface Subject {
   name: string;
-  marks: string;
-  grade: string;
+  total: string;
+}
+
+interface ResultResponse {
+  rollNo: string;
+  candidateName: string;
+  fatherName: string;
+  motherName: string;
+  schoolName: string;
+  subjects: Subject[];
+  totalMarks: string;
+  resultDivision: string;
+  percentage: string;
+  mobile?: string;
 }
 
 export default function RajasthanPage() {
   const [students, setStudents] = useState<Student[]>([]);
+  const [stream, setStream] = useState<'science' | 'arts'>('science');
+  const [isFetchingAll, setIsFetchingAll] = useState(false);
+  const shouldStopRef = useRef(false);
+  const [logMessages, setLogMessages] = useState<string[]>([]);
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [searchRollNo, setSearchRollNo] = useState('');
-  const [activeTab, setActiveTab] = useState<'10' | '12'>('10');
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set([
+    'S.No', 'Name', 'Roll No', 'Mobile', 'Total', '%', 'Result', 'Action'
+  ]));
+  const [showColumnFilter, setShowColumnFilter] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const addLog = (msg: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setLogMessages(prev => [...prev, `[${timestamp}] ${msg}`]);
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    console.log('File selected:', file.name);
+    addLog(`File selected: ${file.name}`);
 
     const reader = new FileReader();
     reader.onload = (event) => {
+      addLog('Parsing Excel file...');
       const data = new Uint8Array(event.target?.result as ArrayBuffer);
       const workbook = XLSX.read(data, { type: 'array' });
       const sheetName = workbook.SheetNames[0];
@@ -71,610 +95,594 @@ export default function RajasthanPage() {
       const parsedStudents: Student[] = jsonData.map((row: unknown, idx): Student => {
         const r = row as Record<string, unknown>;
         return {
-          id: idx,
+          id: Date.now() + idx,
           rollNo: findColumnValue(r, ['roll no', 'rollno', 'roll number', 'roll']).replace(/\D/g, ''),
           name: findColumnValue(r, ['name', 'student']),
           mobile: findColumnValue(r, ['mobile', 'phone']),
-          courseName: findColumnValue(r, ['course']),
-          remark: findColumnValue(r, ['remark']),
           status: 'pending' as const,
         };
       }).filter((s): s is Student => s.rollNo !== '');
 
-      console.log('Parsed', parsedStudents.length, 'students');
+      addLog(`Parsed ${parsedStudents.length} students`);
       setStudents(parsedStudents);
+      setSelectedIds(new Set(parsedStudents.map(s => s.id)));
     };
     reader.readAsArrayBuffer(file);
   };
 
   const parseResultHtml = (html: string): ResultData | null => {
     try {
-      const cleanText = (s: string): string => s.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, '').replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+      const cleanText = (s: string): string => 
+        s.replace(/<[^>]+>/g, '')
+         .replace(/&nbsp;/g, ' ')
+         .replace(/\r?\n/g, ' ')
+         .replace(/\s+/g, ' ')
+         .trim();
 
-      // Helper: find value in second <td> after a label
-      const getRowValue = (label: string): string => {
-        const labelIdx = html.indexOf(label);
-        if (labelIdx === -1) return '';
-        const section = html.substring(labelIdx, labelIdx + 400);
-        // Find second <td> ... </td>
-        const td2Start = section.indexOf('</td>', label.length) + 5;
-        const td2End = section.indexOf('</td>', td2Start);
-        if (td2Start < 5 || td2End === -1) return '';
-        const td2 = section.substring(td2Start, td2End);
-        // Get last font value (the actual value)
-        const fontMatches = td2.match(/<font[^>]*>([\s\S]*?)<\/font>/gi);
-        if (!fontMatches || fontMatches.length === 0) return cleanText(td2);
-        return cleanText(fontMatches[fontMatches.length - 1]);
+      const getValue = (label: string): string => {
+        const regex = new RegExp(`<p class="lbl">${label}:</p>\\s*<p class="name">([\\s\\S]*?)</p>`, 'i');
+        const match = html.match(regex);
+        return match ? cleanText(match[1]) : '';
       };
 
-      const rollNumber = getRowValue('Roll No.');
-      const studentName = getRowValue('Name </font>');
-      const fatherName = getRowValue("Father's Name");
-      const motherName = getRowValue("Mother's");
-      const schoolName = getRowValue("School/Center's");
+      const candidateName = getValue('Candidate Name');
+      const rollNumber = getValue('Roll No');
+      const fatherName = getValue('Father Name');
+      const motherName = getValue('Mother Name');
+      const schoolName = getValue("School/Center's Name");
 
-      console.log('Personal:', { rollNumber, studentName, fatherName, motherName, schoolName });
-
-       // Parse subjects - look for patterns in the marks section
-       const subjects: Subject[] = [];
-       const marksStart = html.indexOf('Marks Details');
-       const marksEnd = html.indexOf('Final Result');
-
-       console.log('Marks section:', marksStart, '-', marksEnd);
-
-       if (marksStart > 0 && marksEnd > marksStart) {
-         const marksHtml = html.substring(marksStart, marksEnd);
-         console.log('Marks HTML length:', marksHtml.length);
-         
-         // Extract all font elements
-         const fontRegex = /<font[^>]*>([\s\S]*?)<\/font>/gi;
-         const allFonts: string[] = [];
-         let m;
-         while ((m = fontRegex.exec(marksHtml)) !== null) {
-           const val = cleanText(m[1]);
-           if (val) allFonts.push(val);
-         }
-         
-         console.log('Total font elements found:', allFonts.length);
-         console.log('All fonts:', allFonts);
-         
-         // Based on the HTML structure, subjects appear to be in groups of 6 font elements
-         // Pattern: [Subject Name], [Some Value], [Some Value], [Some Value], [Some Value], [Marks]
-         // But from the output, it seems like: [Marks1], [Marks2], [Marks3], [Marks4], [Marks5], [Subject Name]
-         
-         // Let's look for patterns where we have 5 numeric values followed by a text value
-         for (let i = 0; i < allFonts.length; i++) {
-           // Check if we have enough elements ahead
-           if (i + 5 >= allFonts.length) break;
-           
-           // Check if current 5 elements are numeric (marks) and the 6th is text (subject name)
-           const isNumeric = (str: string) => !isNaN(parseFloat(str));
-           const fiveMarks = allFonts.slice(i, i + 5);
-           const potentialSubject = allFonts[i + 5];
-           
-           // Check if first 5 are numeric marks and 6th is a potential subject name
-           const allFiveNumeric = fiveMarks.every(isNumeric);
-           const isLikelySubjectName = potentialSubject.length > 1 && 
-                                     !isNumeric(potentialSubject) &&
-                                     potentialSubject !== 'TH' && 
-                                     potentialSubject !== 'SS' &&
-                                     potentialSubject !== 'TH+SS' &&
-                                     potentialSubject !== 'PR' &&
-                                     potentialSubject !== 'Total';
-                                     
-           if (allFiveNumeric && isLikelySubjectName) {
-             // We found a pattern: [mark1, mark2, mark3, mark4, mark5, subjectName]
-             // But we need to map each mark to its corresponding subject
-             // Based on the table structure, it seems like each row represents a student's marks
-             // and columns represent subjects
-             
-             // Actually, looking at the desired output, it seems like:
-             // Columns: S.No, Name, Roll No, 061, 020, 081, 074, 059, F. O. I. TECH., Total, %, Result
-             // Where 061, 020, etc. are SUBJECT CODES and the values under them are MARKS
-             
-             // So the font elements we're seeing are actually the MARKS VALUES for each subject
-             // and we need to get the SUBJECT NAMES from the table headers
-             
-             // Let's take a different approach - look for the table headers first
-           }
-         }
-         
-         // Alternative approach: Look for table headers that contain subject names
-         // Then map the marks to those subjects
-         
-         // Let's try to extract subject names from table headers first
-         const headerPatterns = [
-           /<td[^>]*>[^<]*061[^<]*<\/td>/i,
-           /<td[^>]*>[^<]*020[^<]*<\/td>/i,
-           /<td[^>]*>[^<]*081[^<]*<\/td>/i,
-           /<td[^>]*>[^<]*074[^<]*<\/td>/i,
-           /<td[^>]*>[^<]*059[^<]*<\/td>/i,
-           /<td[^>]*>[^<]*F\.?\s*O\.?\s*I\.?\s*TECH[^<]*<\/td>/i
-         ];
-         
-         // Actually, let's look at the actual HTML structure more carefully
-         // From the logs, we see values like 066, 020, 074, 062, 099, 094 which are the marks
-         // And we want to map these to subject names like 061, 020, 081, 074, 059, F. O. I. TECH.
-         
-         // Let's look for a different pattern: maybe the subjects are in thead and marks in tbody
-         const theadMatch = html.match(/<thead[^>]*>([\s\S]*?)<\/thead>/i);
-         const tbodyMatch = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
-         
-         if (theadMatch && tbodyMatch) {
-           const theadHtml = theadMatch[1];
-           const tbodyHtml = tbodyMatch[1];
-           
-           // Extract subject names from thead
-           const headerFontRegex = /<font[^>]*>([\s\S]*?)<\/font>/gi;
-           const headerFonts: string[] = [];
-           let headerM;
-           while ((headerM = headerFontRegex.exec(theadHtml)) !== null) {
-             const val = cleanText(headerM[1]);
-             if (val) headerFonts.push(val);
-           }
-           
-           console.log('Header fonts:', headerFonts);
-           
-           // Extract marks from tbody
-           const bodyFontRegex = /<font[^>]*>([\s\S]*?)<\/font>/gi;
-           const bodyFonts: string[] = [];
-           let bodyM;
-           while ((bodyM = bodyFontRegex.exec(tbodyHtml)) !== null) {
-             const val = cleanText(bodyM[1]);
-             if (val) bodyFonts.push(val);
-           }
-           
-           console.log('Body fonts:', bodyFonts);
-           
-           // If we have 6 header fonts (subject names) and 6 body fonts (marks for one student)
-           if (headerFonts.length >= 6 && bodyFonts.length >= 6) {
-             // Take the last 6 header fonts as subject names (skip S.No, Name, Roll No)
-             const subjectNames = headerFonts.slice(Math.max(0, headerFonts.length - 6));
-             // Take the first 6 body fonts as marks
-             const subjectMarks = bodyFonts.slice(0, 6);
-             
-             console.log('Subject names from header:', subjectNames);
-             console.log('Subject marks from body:', subjectMarks);
-             
-             // Create subjects array
-             for (let j = 0; j < 6; j++) {
-               const name = subjectNames[j];
-               const marksStr = subjectMarks[j];
-               
-               // Skip if it's not a meaningful subject name
-               if (name.length < 2 || 
-                   name === 'TH' || name === 'SS' || name === 'TH+SS' || 
-                   name === 'PR' || name === 'Total') {
-                 continue;
-               }
-               
-               const gradeMatch = marksStr.match(/[A-Z]$/);
-               const numericPart = marksStr.replace(/[A-Z]$/, '').trim();
-               
-               subjects.push({
-                 name,
-                 marks: numericPart,
-                 grade: gradeMatch ? gradeMatch[0] : '',
-               });
-             }
-             
-             console.log('Subjects found:', subjects.length, subjects.map(s => `${s.name}: ${s.marks}${s.grade}`));
-           }
-         }
-         
-         // Fallback to original method if the above didn't work
-         if (subjects.length === 0) {
-           console.log('Using fallback subject parsing');
-           
-           // Look for patterns in the marks section that might indicate subject rows
-           const rows = marksHtml.split(/<tr[^>]*>/i);
-           console.log('Rows split:', rows.length);
-           
-           for (let i = 0; i < rows.length; i++) {
-             const row = rows[i];
-             const lowerRow = row.toLowerCase();
-             if (lowerRow.includes('subject name') || lowerRow.includes('marks obtained') || row.trim() === '') continue;
- 
-             const fonts: string[] = [];
-             const fontRegex = /<font[^>]*>([\s\S]*?)<\/font>/gi;
-             let m;
-             while ((m = fontRegex.exec(row)) !== null) {
-               const val = cleanText(m[1]);
-               if (val) fonts.push(val);
-             }
- 
-             // Look for patterns like [Subject Name, ..., Marks]
-             if (fonts.length >= 6) {
-               const name = fonts[0];
-               if (name === 'TH' || name === 'SS' || name === 'TH+SS' || name === 'PR' || name === 'Total' || name.length < 2) continue;
-               
-               const totalStr = fonts[5];
-               subjects.push({
-                 name,
-                 marks: totalStr.replace(/[A-Z]$/, '').trim(),
-                 grade: totalStr.match(/[A-Z]$/)?.[0] || '',
-               });
-             }
-           }
-           
-           console.log('Fallback subjects found:', subjects.length, subjects.map(s => s.name));
-         }
-       }
-      console.log('Subjects found:', subjects.length, subjects.map(s => s.name));
-
-      // Parse final result - use section-specific parsing
-      let totalMarks = '';
-      let percentage = 0;
-      let result = 'Pass';
-
-      const finalIdx = html.indexOf('Final Result');
-      if (finalIdx > 0) {
-        const finalHtml = html.substring(finalIdx, finalIdx + 2000);
-        
-        const getFinalValue = (label: string): string => {
-          const idx = finalHtml.indexOf(label);
-          if (idx === -1) return '';
-          const section = finalHtml.substring(idx, idx + 400);
-          const td2Start = section.indexOf('</td>', label.length) + 5;
-          const td2End = section.indexOf('</td>', td2Start);
-          if (td2Start < 5 || td2End === -1) return '';
-          const td2 = section.substring(td2Start, td2End);
-          const fontMatches = td2.match(/<font[^>]*>([\s\S]*?)<\/font>/gi);
-          if (!fontMatches || fontMatches.length === 0) return cleanText(td2);
-          return cleanText(fontMatches[fontMatches.length - 1]);
-        };
-
-        totalMarks = getFinalValue('Total Marks');
-        const percVal = getFinalValue('Percentage');
-        percentage = parseFloat(percVal) || 0;
-        result = getFinalValue('Result') || 'Pass';
+      const subjects: Subject[] = [];
+      const subjectRowRegex = /<div class="subj_row">([\s\S]*?)<\/div>/gi;
+      let match;
+      while ((match = subjectRowRegex.exec(html)) !== null) {
+        const rowContent = match[1];
+        if (rowContent.includes('<span>Sub</span>') && rowContent.includes('<span>Total</span>')) {
+          const nameMatch = rowContent.match(/<span>Sub<\/span>([\s\S]*?)<\/p>/i);
+          const totalMatch = rowContent.match(/<span>Total<\/span>([\s\S]*?)<\/p>/i);
+          
+          if (nameMatch && totalMatch) {
+            subjects.push({
+              name: cleanText(nameMatch[1]),
+              total: cleanText(totalMatch[1]),
+            });
+          }
+        }
       }
 
-      console.log('Final:', { totalMarks, percentage, result });
+      const getSummaryValue = (label: string): string => {
+        const regex = new RegExp(`<p class="span25">${label}\\s*:</p>\\s*<p class="span22">([\\s\\S]*?)</p>`, 'i');
+        const match = html.match(regex);
+        return match ? cleanText(match[1]) : '';
+      };
+
+      const totalMarks = getSummaryValue('Total Marks');
+      const resultDivision = getSummaryValue('Result');
+      const percentage = getSummaryValue('Percentage');
 
       return {
-        studentName,
+        candidateName,
         fatherName,
         motherName,
         schoolName,
         rollNumber,
         subjects,
         totalMarks,
-        percentage: Math.round(percentage * 100) / 100,
-        result,
+        resultDivision,
+        percentage,
       };
     } catch (error) {
-      console.error('Error parsing result HTML:', error);
+      addLog(`Error parsing HTML: ${error}`);
       return null;
     }
   };
 
   const fetchResult = async (student: Student) => {
-    console.log('Fetching result for:', student.name || student.rollNo);
+    addLog(`Fetching result for roll: ${student.rollNo}`);
     setStudents(prev =>
-      prev.map(s =>
-        s.id === student.id ? { ...s, status: 'fetching' } : s
-      )
+      prev.map(s => (s.id === student.id ? { ...s, status: 'fetching' } : s))
     );
 
     try {
       const res = await fetch('/api/rajasthan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rollNo: student.rollNo,
-          class: activeTab,
-        }),
+        body: JSON.stringify({ rollNo: student.rollNo, stream, mobile: student.mobile }),
       });
 
       const data = await res.json();
-      console.log('FULL HTML:', data.html);
-
-      if (data.success && data.html && data.html.includes('Personal Details')) {
+      if (data.success && data.html) {
         const resultData = parseResultHtml(data.html);
-        if (resultData && resultData.studentName) {
+        if (resultData) {
           setStudents(prev =>
             prev.map(s =>
-              s.id === student.id ? { ...s, status: 'success', result: resultData } : s
+              s.id === student.id
+                ? { ...s, status: 'success', result: resultData }
+                : s
             )
           );
-          console.log('Result fetched:', resultData.studentName);
+          addLog(`Success & Saved: ${resultData.candidateName}`);
+          return true;
         } else {
-          throw new Error('Failed to parse result');
+          throw new Error('Parsing failed');
         }
       } else {
-        throw new Error('Result not found for this roll number');
+        throw new Error(data.error || 'Failed to fetch');
       }
     } catch (error) {
-      const errMsg = error instanceof Error ? error.message : 'Failed to fetch';
-      console.error('Error:', errMsg);
+      const errMsg = error instanceof Error ? error.message : 'Error';
+      addLog(`Error for ${student.rollNo}: ${errMsg}`);
       setStudents(prev =>
         prev.map(s =>
           s.id === student.id ? { ...s, status: 'error', error: errMsg } : s
         )
       );
+      return false;
     }
   };
 
   const fetchAllResults = async () => {
-    const pendingStudents = students.filter(s => s.status === 'pending' || s.status === 'error');
-    for (const student of pendingStudents) {
-      await fetchResult(student);
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    if (isFetchingAll) return;
+    setIsFetchingAll(true);
+    shouldStopRef.current = false;
+    addLog('Starting batch fetch with 2s delay...');
+    
+    const pendingStudents = students.filter(s => s.status !== 'success' && selectedIds.has(s.id));
+    
+    for (let i = 0; i < pendingStudents.length; i++) {
+      if (shouldStopRef.current) {
+        addLog('Fetch process stopped by user.');
+        break;
+      }
+
+      await fetchResult(pendingStudents[i]);
+      
+      if (i < pendingStudents.length - 1 && !shouldStopRef.current) {
+        addLog(`Waiting 2 seconds before next request (${i + 1}/${pendingStudents.length})...`);
+        for (let j = 0; j < 20; j++) {
+          if (shouldStopRef.current) break;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+    }
+    
+    setIsFetchingAll(false);
+    shouldStopRef.current = false;
+    addLog('Batch fetch process finished.');
+  };
+
+  const handleFetchSavedData = async () => {
+    addLog(`Fetching saved data for ${stream}...`);
+    try {
+      const res = await fetch(`/api/rajasthan?stream=${stream}`);
+      const data = await res.json();
+      
+      if (data.results && data.results.length > 0) {
+        const savedStudents: Student[] = data.results.map((r: ResultResponse, idx: number): Student => ({
+          id: Date.now() + idx,
+          rollNo: r.rollNo,
+          name: r.candidateName,
+          mobile: r.mobile,
+          status: 'success',
+          result: {
+            candidateName: r.candidateName,
+            fatherName: r.fatherName,
+            motherName: r.motherName,
+            schoolName: r.schoolName,
+            rollNumber: r.rollNo,
+            subjects: r.subjects || [],
+            totalMarks: r.totalMarks,
+            resultDivision: r.resultDivision,
+            percentage: r.percentage,
+          }
+        }));
+        setStudents(savedStudents);
+        setSelectedIds(new Set(savedStudents.map(s => s.id)));
+        addLog(`Loaded ${savedStudents.length} saved results from database.`);
+      } else if (data.error && data.error.includes('unavailable')) {
+        addLog(`Database unavailable - please check MongoDB Atlas connection`);
+      } else {
+        addLog(`No saved results found in database`);
+      }
+    } catch (err) {
+      addLog(`Error: ${err instanceof Error ? err.message : 'Failed to fetch saved data'}`);
     }
   };
 
+  const handleStopFetch = () => {
+    shouldStopRef.current = true;
+    addLog('Stopping... please wait for current request to finish.');
+  };
+
+  const handleClearData = async () => {
+    if (confirm('Are you sure you want to clear all data from database and screen? This cannot be undone.')) {
+      try {
+        await fetch(`/api/rajasthan?stream=${stream}`, { method: 'DELETE' });
+        setStudents([]);
+        setSelectedIds(new Set());
+        setLogMessages([]);
+        addLog('All data cleared from database and screen.');
+      } catch (error) {
+        addLog('Failed to clear data from database.');
+      }
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === students.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(students.map(s => s.id)));
+    }
+  };
+
+  const toggleSelectRow = (id: number) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedIds(newSelected);
+  };
+
+  const handleSearchSingle = async () => {
+    if (!searchRollNo) return;
+    const tempStudent: Student = {
+      id: Date.now(),
+      rollNo: searchRollNo,
+      status: 'pending',
+    };
+    setStudents(prev => [tempStudent, ...prev]);
+    setSelectedIds(prev => new Set(prev).add(tempStudent.id));
+    setShowSearchModal(false);
+    setSearchRollNo('');
+    await fetchResult(tempStudent);
+  };
+
   const exportToExcel = () => {
-    console.log('Exporting to Excel...');
-    const exportData = students
-      .filter(s => s.status === 'success' && s.result)
-      .map(s => {
-        const r = s.result!;
-        const row: Record<string, string | number> = {
-          'S.No': s.id + 1,
-          'Name': s.name || r.studentName,
-          'Roll No': r.rollNumber,
-          'Father Name': r.fatherName,
-          'Mother Name': r.motherName,
-          'School': r.schoolName,
-          'Total Marks': r.totalMarks,
-          '%': r.percentage,
-          'Result': r.result,
-        };
+    addLog('Exporting to Excel...');
+    const fetched = students.filter(s => s.status === 'success' && s.result && selectedIds.has(s.id));
+    if (fetched.length === 0) {
+      addLog('No successful results selected for export.');
+      return;
+    }
 
-        r.subjects.forEach(sub => {
-          row[sub.name] = sub.marks;
-        });
+    const allSubjectNamesSet = new Set<string>();
+    fetched.forEach(s => s.result?.subjects.forEach(sub => allSubjectNamesSet.add(sub.name)));
+    const subjectList = Array.from(allSubjectNamesSet);
 
-        return row;
+    const exportData = fetched.map(s => {
+      const r = s.result!;
+      const row: Record<string, string | number> = {
+        'S.No': s.id,
+        'Name': s.name || r.candidateName,
+        'Roll No': r.rollNumber,
+        'Mobile': s.mobile || '-',
+        'Total Marks': r.totalMarks,
+        'Percentage': r.percentage,
+        'Result': r.resultDivision,
+      };
+      subjectList.forEach(subName => {
+        const sub = r.subjects.find(sub => sub.name === subName);
+        row[subName] = sub ? sub.total : '-';
       });
+      return row;
+    });
 
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Results');
-    XLSX.writeFile(wb, `RBSE_Class${activeTab}_Results.xlsx`);
-    console.log('Exported', exportData.length, 'results');
+    XLSX.writeFile(wb, `Rajasthan_12th_${stream}_Results.xlsx`);
   };
 
-  const fetchedStudents = students.filter(s => s.status === 'success' && s.result);
-  const pendingCount = students.filter(s => s.status === 'pending').length;
+  const allSubjectNames = Array.from(
+    new Set(
+      students
+        .filter(s => s.status === 'success' && s.result)
+        .flatMap(s => s.result?.subjects.map(sub => sub.name) || [])
+    )
+  );
+
+  const toggleColumn = (col: string) => {
+    const newCols = new Set(visibleColumns);
+    if (newCols.has(col)) {
+      newCols.delete(col);
+    } else {
+      newCols.add(col);
+    }
+    setVisibleColumns(newCols);
+  };
+
+
   const successCount = students.filter(s => s.status === 'success').length;
   const errorCount = students.filter(s => s.status === 'error').length;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-gray-50 p-6 font-sans">
+      <div className="max-w-full mx-auto px-4">
         <div className="flex items-center justify-between mb-6">
           <div>
             <Link href="/" className="text-blue-600 hover:text-blue-800 text-sm mb-2 inline-block">
               ← Back to Home
             </Link>
             <h1 className="text-2xl font-bold text-orange-600">
-              Rajasthan Board (RBSE) - Result Fetcher
+              Rajasthan Board 12th Result 2026
             </h1>
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow-md mb-6">
-          <div className="flex border-b">
-            <button
-              onClick={() => setActiveTab('10')}
-              className={`px-6 py-3 font-semibold ${
-                activeTab === '10'
-                  ? 'border-b-2 border-orange-500 text-orange-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Class 10th
-            </button>
-            <button
-              onClick={() => setActiveTab('12')}
-              className={`px-6 py-3 font-semibold ${
-                activeTab === '12'
-                  ? 'border-b-2 border-orange-500 text-orange-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Class 12th
-            </button>
-          </div>
-        </div>
+        <div className="bg-white rounded-lg shadow-md p-6 mb-6 sticky top-0 z-30">
+          <div className="flex flex-wrap gap-4 items-center">
+            <div className="flex items-center bg-gray-100 p-1 rounded-lg">
+              <button
+                onClick={() => setStream('science')}
+                className={`px-4 py-2 rounded-md font-medium transition-all ${
+                  stream === 'science' 
+                  ? 'bg-blue-600 text-white shadow-sm' 
+                  : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Science
+              </button>
+              <button
+                onClick={() => setStream('arts')}
+                className={`px-4 py-2 rounded-md font-medium transition-all ${
+                  stream === 'arts' 
+                  ? 'bg-blue-600 text-white shadow-sm' 
+                  : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Arts
+              </button>
+            </div>
 
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <div className="flex flex-wrap gap-4 items-center mb-4">
             <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                onChange={handleFileUpload}
-                ref={fileInputRef}
-                className="hidden"
-              />
-              <span className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
-                Upload Excel File
+              <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} ref={fileInputRef} className="hidden" />
+              <span className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-sm">
+                Excel Upload
               </span>
             </label>
+
             <button
               onClick={() => setShowSearchModal(true)}
-              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium"
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium text-sm"
             >
-              Search Single
+              Get Single Result
             </button>
+
+            <button
+              onClick={handleFetchSavedData}
+              className="px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 font-medium text-sm"
+            >
+              Fetch Saved Data
+            </button>
+
             {students.length > 0 && (
-              <button
-                onClick={fetchAllResults}
-                disabled={pendingCount === 0}
-                className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 font-medium"
-              >
-                Fetch All ({pendingCount} pending)
-              </button>
+              <>
+                {!isFetchingAll ? (
+                  <button
+                    onClick={fetchAllResults}
+                    disabled={selectedIds.size === 0}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium text-sm"
+                  >
+                    Fetch All ({selectedIds.size} selected)
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleStopFetch}
+                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium text-sm animate-pulse"
+                  >
+                    Stop Fetching
+                  </button>
+                )}
+                
+                <button
+                  onClick={handleClearData}
+                  className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium text-sm"
+                >
+                  Clear All Data
+                </button>
+              </>
             )}
+
+            <div className="relative">
+              <button
+                onClick={() => setShowColumnFilter(!showColumnFilter)}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium text-sm"
+              >
+                Columns Filter
+              </button>
+              {showColumnFilter && (
+                <div className="absolute top-full mt-2 bg-white border rounded-lg shadow-xl p-4 z-40 w-48 max-h-64 overflow-y-auto">
+                  <div className="flex flex-col gap-2">
+                    {['S.No', 'Name', 'Roll No', 'Mobile', 'Total', '%', 'Result', 'Action', ...allSubjectNames].map(col => (
+                      <label key={col} className="flex items-center gap-2 text-xs font-medium cursor-pointer hover:bg-gray-50 p-1">
+                        <input
+                          type="checkbox"
+                          checked={visibleColumns.has(col)}
+                          onChange={() => toggleColumn(col)}
+                          className="w-3 h-3"
+                        />
+                        {col}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={exportToExcel}
+              disabled={successCount === 0}
+              className="ml-auto px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 font-medium text-sm"
+            >
+              Export Excel
+            </button>
           </div>
 
           {students.length > 0 && (
-            <div className="flex flex-wrap gap-3 mt-4">
-              <div className="bg-gray-100 px-4 py-2 rounded-lg">
-                <span className="font-semibold">Total:</span> {students.length}
+            <div className="flex flex-wrap gap-4 mt-4 pt-4 border-t text-xs">
+              <div className="bg-gray-100 px-3 py-1.5 rounded-lg border border-gray-200">
+                <span className="font-semibold text-gray-700">Total:</span> {students.length}
               </div>
-              <div className="bg-yellow-100 px-4 py-2 rounded-lg">
-                <span className="font-semibold">Pending:</span> {pendingCount}
+              <div className="bg-blue-50 px-3 py-1.5 rounded-lg text-blue-700 border border-blue-100">
+                <span className="font-semibold">Selected:</span> {selectedIds.size}
               </div>
-              <div className="bg-green-100 px-4 py-2 rounded-lg">
+              <div className="bg-green-50 px-3 py-1.5 rounded-lg text-green-700 border border-green-100">
                 <span className="font-semibold">Success:</span> {successCount}
               </div>
-              <div className="bg-red-100 px-4 py-2 rounded-lg">
+              <div className="bg-red-50 px-3 py-1.5 rounded-lg text-red-700 border border-red-100">
                 <span className="font-semibold">Error:</span> {errorCount}
               </div>
-              <button
-                onClick={exportToExcel}
-                disabled={fetchedStudents.length === 0}
-                className="ml-auto px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium"
-              >
-                Export to Excel
-              </button>
             </div>
           )}
         </div>
 
         {showSearchModal && (
-          <div className="bg-white rounded-xl shadow-lg p-6 mb-4 border-2 border-purple-200">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-lg font-bold text-gray-900">Search Single Result</h2>
-              <button
-                onClick={() => {
-                  setShowSearchModal(false);
-                  setSearchRollNo('');
-                }}
-                className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
-              >
-                ×
-              </button>
-            </div>
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Roll Number</label>
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-bold">Search Single Result</h2>
+                <button onClick={() => setShowSearchModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+              </div>
               <input
                 type="text"
                 value={searchRollNo}
                 onChange={(e) => setSearchRollNo(e.target.value)}
-                onKeyDown={async (e) => {
-                  if (e.key === 'Enter' && searchRollNo) {
-                    const tempStudent: Student = {
-                      id: Date.now(),
-                      rollNo: searchRollNo,
-                      status: 'pending',
-                    };
-                    setStudents(prev => [...prev, tempStudent]);
-                    setShowSearchModal(false);
-                    setSearchRollNo('');
-                    await fetchResult(tempStudent);
-                  }
-                }}
-                placeholder="e.g. 1100384"
-                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg text-lg text-gray-900 focus:border-purple-500 focus:outline-none"
+                placeholder="Enter Roll Number"
+                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg mb-4 text-center text-lg focus:border-blue-500 outline-none"
                 autoFocus
+                onKeyDown={(e) => e.key === 'Enter' && handleSearchSingle()}
               />
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  setShowSearchModal(false);
-                  setSearchRollNo('');
-                }}
-                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  if (!searchRollNo) return;
-                  const tempStudent: Student = {
-                    id: Date.now(),
-                    rollNo: searchRollNo,
-                    status: 'pending',
-                  };
-                  setStudents(prev => [...prev, tempStudent]);
-                  setShowSearchModal(false);
-                  setSearchRollNo('');
-                  await fetchResult(tempStudent);
-                }}
-                disabled={!searchRollNo}
-                className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 font-medium"
-              >
-                Search
-              </button>
+              <div className="flex gap-3">
+                <button onClick={() => setShowSearchModal(false)} className="flex-1 px-4 py-2 bg-gray-100 rounded-lg font-medium">Cancel</button>
+                <button onClick={handleSearchSingle} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium">Search</button>
+              </div>
             </div>
           </div>
         )}
 
+        {logMessages.length > 0 && (
+          <div className="bg-gray-900 text-green-400 p-4 rounded-lg mb-6 font-mono text-[10px] max-h-32 overflow-y-auto shadow-inner border border-gray-800">
+            {logMessages.map((msg, idx) => (
+              <div key={idx} className="mb-0.5 opacity-80">{msg}</div>
+            ))}
+          </div>
+        )}
+
         {students.length > 0 && (
-          <div className="bg-white rounded-lg shadow-md overflow-hidden mb-6">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-800 text-white">
+          <div className="bg-white rounded-lg shadow-xl overflow-hidden border border-gray-200">
+            <div className="overflow-x-auto max-h-[70vh]">
+              <table className="w-full text-sm text-left border-collapse table-auto relative">
+                <thead className="bg-gray-800 text-white uppercase text-[10px] tracking-wider sticky top-0 z-20">
                   <tr>
-                    <th className="px-2 py-2 text-left">S.No</th>
-                    <th className="px-2 py-2 text-left">Name</th>
-                    <th className="px-2 py-2 text-left">Roll No</th>
-                    {fetchedStudents.length > 0 && fetchedStudents[0].result?.subjects.map((sub, i) => (
-                      <th key={i} className="px-1 py-2 text-center bg-purple-700 text-[10px]">{sub.name}</th>
+                    <th className="px-3 py-4 border-r border-gray-700 text-center sticky left-0 z-30 bg-gray-800 w-12">
+                      <input type="checkbox" checked={selectedIds.size === students.length && students.length > 0} onChange={toggleSelectAll} className="w-4 h-4 rounded" />
+                    </th>
+                    {visibleColumns.has('S.No') && (
+                      <th className="px-4 py-4 border-r border-gray-700 text-center sticky left-12 z-30 bg-gray-800 w-16">S.No</th>
+                    )}
+                    {visibleColumns.has('Name') && (
+                      <th className="px-4 py-4 border-r border-gray-700 sticky left-[112px] z-30 bg-gray-800 min-w-[150px]">Name</th>
+                    )}
+                    {visibleColumns.has('Roll No') && (
+                      <th className="px-4 py-4 border-r border-gray-700 min-w-[120px]">Roll No</th>
+                    )}
+                    {visibleColumns.has('Mobile') && (
+                      <th className="px-4 py-4 border-r border-gray-700 min-w-[120px]">Mobile</th>
+                    )}
+                    
+                    {allSubjectNames.map((subName, i) => visibleColumns.has(subName) && (
+                      <th key={i} className="px-4 py-4 border-r border-gray-700 bg-blue-900 text-center min-w-[100px]">
+                        {subName}
+                      </th>
                     ))}
-                    <th className="px-2 py-2 text-center bg-orange-600">Total</th>
-                    <th className="px-2 py-2 text-center bg-blue-600">%</th>
-                    <th className="px-2 py-2 text-center">Result</th>
-                    <th className="px-2 py-2 text-center">Status</th>
-                    <th className="px-2 py-2 text-center">Action</th>
+                    
+                    {visibleColumns.has('Total') && (
+                      <th className="px-4 py-4 border-r border-gray-700 bg-orange-700 text-center min-w-[100px]">Total</th>
+                    )}
+                    {visibleColumns.has('%') && (
+                      <th className="px-4 py-4 border-r border-gray-700 bg-purple-700 text-center min-w-[80px]">%</th>
+                    )}
+                    {visibleColumns.has('Result') && (
+                      <th className="px-4 py-4 border-r border-gray-700 min-w-[120px]">Result</th>
+                    )}
+                    {visibleColumns.has('Action') && (
+                      <th className="px-4 py-4 text-center sticky right-0 bg-gray-800 z-30 w-24 border-l border-gray-700">Action</th>
+                    )}
                   </tr>
                 </thead>
-                <tbody>
-                  {students.map((student) => (
-                    <tr key={student.id} className="border-t hover:bg-gray-50">
-                      <td className="px-2 py-2">{student.id + 1}</td>
-                      <td className="px-2 py-2 font-medium max-w-[150px] truncate">{student.name || student.result?.studentName || '-'}</td>
-                      <td className="px-2 py-2 font-mono">{student.rollNo}</td>
-                      {fetchedStudents.length > 0 && fetchedStudents[0].result?.subjects.map((sub, i) => {
-                        const studentSubject = student.result?.subjects.find(s => s.name === sub.name);
-                        return (
-                          <td key={i} className="px-1 py-2 text-center text-xs">
-                            {studentSubject?.marks || '-'}
-                          </td>
-                        );
-                      })}
-                      <td className="px-2 py-2 text-center font-bold bg-orange-50">{student.result?.totalMarks || '-'}</td>
-                      <td className="px-2 py-2 text-center font-bold text-blue-600">{student.result?.percentage ? `${student.result.percentage}%` : '-'}</td>
-                      <td className="px-2 py-2 text-center">
-                        {student.result?.result && (
-                          <span className={`px-2 py-1 rounded text-xs ${
-                            student.result.result.toLowerCase().includes('division')
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-red-100 text-red-800'
-                          }`}>
-                            {student.result.result}
-                          </span>
-                        )}
+                <tbody className="divide-y divide-gray-200">
+                  {students.map((student, idx) => (
+                    <tr key={student.id} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-blue-50 transition-colors`}>
+                      <td className="px-3 py-3 border-r border-gray-100 text-center sticky left-0 z-10 bg-inherit">
+                        <input type="checkbox" checked={selectedIds.has(student.id)} onChange={() => toggleSelectRow(student.id)} className="w-4 h-4 rounded" />
                       </td>
-                      <td className="px-2 py-2 text-center">
-                        {student.status === 'pending' && (
-                          <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs">Pending</span>
-                        )}
-                        {student.status === 'fetching' && (
-                          <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">Fetching...</span>
-                        )}
-                        {student.status === 'success' && (
-                          <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">Done</span>
-                        )}
-                        {student.status === 'error' && (
-                          <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs">Error</span>
-                        )}
-                      </td>
-                      <td className="px-2 py-2 text-center">
-                        <button
-                          onClick={() => fetchResult(student)}
-                          disabled={student.status === 'fetching' || student.status === 'success'}
-                          className="px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          Get
-                        </button>
-                      </td>
+                      {visibleColumns.has('S.No') && (
+                        <td className="px-4 py-3 border-r border-gray-100 text-center font-mono text-gray-400 sticky left-12 z-10 bg-inherit">{idx + 1}</td>
+                      )}
+                      {visibleColumns.has('Name') && (
+                        <td className="px-4 py-3 border-r border-gray-100 font-medium sticky left-[112px] z-10 bg-inherit whitespace-nowrap overflow-hidden text-ellipsis">
+                          {student.result?.candidateName || student.name || '-'}
+                        </td>
+                      )}
+                      {visibleColumns.has('Roll No') && (
+                        <td className="px-4 py-3 border-r border-gray-100 font-mono text-blue-600 font-semibold">{student.rollNo}</td>
+                      )}
+                      {visibleColumns.has('Mobile') && (
+                        <td className="px-4 py-3 border-r border-gray-100 text-gray-600 font-mono text-xs">{student.mobile || '-'}</td>
+                      )}
+                      
+                      {allSubjectNames.map((subName, i) => visibleColumns.has(subName) && (
+                        <td key={i} className="px-4 py-3 border-r border-gray-100 text-center font-mono font-medium">
+                          {student.result?.subjects.find(s => s.name === subName)?.total || '-'}
+                        </td>
+                      ))}
+                      
+                      {visibleColumns.has('Total') && (
+                        <td className="px-4 py-3 border-r border-gray-100 text-center font-bold bg-orange-50/50 text-orange-800">
+                          {student.result?.totalMarks || '-'}
+                        </td>
+                      )}
+                      {visibleColumns.has('%') && (
+                        <td className="px-4 py-3 border-r border-gray-100 text-center font-bold bg-purple-50/50 text-purple-800">
+                          {student.result?.percentage || '-'}
+                        </td>
+                      )}
+                      {visibleColumns.has('Result') && (
+                        <td className="px-4 py-3 border-r border-gray-100 whitespace-nowrap">
+                          <div className="flex flex-col gap-1">
+                            {student.status === 'success' ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-800 text-center border border-green-200">
+                                {student.result?.resultDivision || 'PASSED'}
+                              </span>
+                            ) : student.status === 'fetching' ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 text-center animate-pulse border border-blue-200">
+                                FETCHING
+                              </span>
+                            ) : student.status === 'error' ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800 text-center border border-red-200" title={student.error}>
+                                FAILED
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-800 text-center border border-gray-200">
+                                PENDING
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      )}
+                      {visibleColumns.has('Action') && (
+                        <td className="px-4 py-3 text-center sticky right-0 bg-inherit z-10 shadow-[-4px_0_4px_-2px_rgba(0,0,0,0.05)] border-l border-gray-100">
+                          <button
+                            onClick={() => fetchResult(student)}
+                            disabled={student.status === 'fetching' || student.status === 'success'}
+                            className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-bold uppercase hover:bg-blue-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                          >
+                            {student.status === 'success' ? 'OK' : 'Get'}
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
